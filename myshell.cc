@@ -1,9 +1,12 @@
 #include <stdio.h>
+#include <ctype.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
 #include <sys/wait.h>
 #include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include <string>
 
 #define MAXSIZE 128
@@ -18,6 +21,15 @@ int genvc = 0;
 // 最近一个命令执行完毕，退出码
 int lastcode = 0;
 
+#define NoneRedir 0
+#define InputRedir 1
+#define AppRedir 2
+#define OutputRedir 3
+
+int redir_type = NoneRedir;
+char* filename = NULL;
+
+#define TrimSpace(start) do{while(isspace(*start)) start++;}while(0)
 void LoadEnv()
 {
     // 正常情况，环境变量表内部是从配置文件来的
@@ -68,6 +80,46 @@ int GetCommand(char* command_line,int size){
     command_line[strlen(command_line)-1] = '\0';
 
     return strlen(command_line);
+}
+void  ParseRedir(char commandline[]){
+    redir_type = NoneRedir;
+    filename = NULL;
+    char* start = commandline;
+    char* end = commandline + strlen(commandline);
+    while(start < end){
+        if(*start == '<'){
+            //输入重定向
+            *start = '\0';
+            start++;
+            TrimSpace(start);//去掉/跳过空格
+            redir_type = InputRedir;
+            filename = start;
+            break;
+        }else if(*start == '>'){
+            if(*(start + 1) == '>'){
+                //追加重定向
+                *start = '\0';
+                start++;
+                *start = '\0';
+                start++;
+                TrimSpace(start);//去掉/跳过空格
+                redir_type = AppRedir;
+                filename = start;
+                break;
+            }
+            //输出重定向
+            *start = '\0';
+            start++;
+            TrimSpace(start);//去掉/跳过空格
+            redir_type = OutputRedir;
+            filename = start;
+            break;
+        }else{
+            //暂时没有重定向
+            start++;
+        }
+    }
+    return start;
 }
 int ParseCommand(char* command_line){
     gargc = 0;
@@ -134,6 +186,30 @@ void ExecuteCommand(){
     if(id < 0){
         return;
     }else if(id == 0){
+        int fd = -1;
+        if(redir_type == NoneRedir)
+        {
+            // Do Nothing
+        }
+        else if(redir_type == OutputRedir)
+        {
+            // 子进程要进行输出重定向
+            fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+            dup2(fd, 1);
+        }
+        else if(redir_type == AppRedir)
+        {
+            fd = open(filename, O_WRONLY | O_CREAT | O_APPEND, 0666);
+            dup2(fd, 1);
+        }
+        else if(redir_type == InputRedir)
+        {
+            fd = open(filename, O_RDONLY);
+            dup2(fd, 0);
+        }
+        else{
+            //bug??
+        }
         execvp(gargv[0],gargv);
         exit(0);
     }else{
@@ -160,13 +236,13 @@ int main(){
         //gargv[1] = "-a"
         //gargv[2] = "-l"
         //argc = 3
+        ParseRedir(command_line);
         ParseCommand(command_line);
         //4.查询是否是内建命令
         if(CheckBuiltinExecute() == 1){
             continue;
         }
         ExecuteCommand();
-        sleep(1);
     }
     return 0;
 }
